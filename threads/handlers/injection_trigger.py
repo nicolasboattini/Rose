@@ -824,8 +824,10 @@ class InjectionTrigger:
 
             # Also check if base skin is owned but chroma is selected (for owned chromas)
             # (only a chroma of the hovered skin: a historic/random skin is a different skin)
+            # An unowned chroma of an owned skin can't be picked in the client: it is injected below
             elif (
                 ui_skin_id in owned_skin_ids
+                and effective_skin_id in owned_skin_ids
                 and ui_skin_id < effective_skin_id < ui_skin_id + 100
                 and not is_default
             ):
