@@ -7,11 +7,12 @@ from pathlib import Path
 from injection.loadingname import loading_name
 
 
-def make_table(texts):
-    """An RST v5 table with these keys, the way the game stores them."""
+def make_table(texts, bits=38):
+    """An RST v5 table with these keys, the way the game stores them: 38-bit key hashes before, 39 now."""
+    mask = (1 << bits) - 1
     entries, body = [], bytearray()
-    for key, text in sorted(texts.items(), key=lambda kv: loading_name._key_hash(kv[0])):
-        entries.append(loading_name._key_hash(key) | (len(body) << 38))
+    for key, text in sorted(texts.items(), key=lambda kv: loading_name._key_hash(kv[0]) & mask):
+        entries.append((loading_name._key_hash(key) & mask) | (len(body) << bits))
         body += text.encode('utf-8') + b'\0'
     out = bytearray(b'RST\x05')
     out += struct.pack('<I', len(entries))
@@ -56,6 +57,23 @@ class LoadingNameTests(unittest.TestCase):
         self.assertEqual(text('game_character_displayname_Zed'), 'Shockblade Zed')
         self.assertEqual(text('game_character_displayname_Yasuo'), 'Yasuo')
         self.assertEqual(text('game_character_skin_displayname_Zed_1'), 'Shockblade Zed')
+
+    def test_the_games_current_tables_have_39_bit_key_hashes(self):
+        texts = {
+            'game_character_displayname_Zed': 'Zed',
+            'game_character_displayname_Yasuo': 'Yasuo',
+            'game_character_skin_displayname_Zed_1': 'Shockblade Zed',
+        }
+        table = make_table(texts, bits=39)
+        self.assertEqual(loading_name._hash_bits(table), 39)
+        self.assertEqual(loading_name._hash_bits(make_table(texts)), 38)
+        key = loading_name._key_hash('game_character_displayname_Zed')
+        self.assertEqual(loading_name._text_of(table, key), 'Zed')
+        patched = loading_name._with_text(table, key, 'Shockblade Zed')
+        self.assertEqual(loading_name._hash_bits(patched), 39)
+        self.assertEqual(loading_name._text_of(patched, key), 'Shockblade Zed')
+        self.assertEqual(loading_name._text_of(patched, loading_name._key_hash('game_character_displayname_Yasuo')),
+                         'Yasuo')
 
     def test_an_accented_name_survives_the_round_trip(self):
         table = make_table({'game_character_displayname_Zed': 'Zed'})

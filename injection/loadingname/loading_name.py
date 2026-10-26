@@ -36,7 +36,6 @@ log = get_logger()
 MOD_FOLDER = "ROSE-LoadingName"
 TABLE_PATH = Path("RAW") / "DATA" / "Menu" / "en_US" / "lol.stringtable"
 TABLE_HASH = 0x062D6ED714BFF7DF  # xxh64("data/menu/en_us/lol.stringtable"), fixed for every language
-RST_MASK = (1 << 38) - 1
 # The champion's record points here instead, for the chat and the name over its head. "rose" is as long as "game",
 # so the record's text keeps its length and the file keeps its layout.
 RECORD_KEY = "game_character_displayname_"
@@ -161,7 +160,8 @@ def _unzstd(chunk: bytes, size: int, single_frame: bool) -> Optional[bytes]:
 
 
 # --------------------------------------------------------------------------------------
-# RST v5: "RST", 5, u32 count, count x u64 (38-bit key hash | offset << 38), then the texts
+# RST v5: "RST", 5, u32 count, count x u64 (key hash | offset << bits), then the texts. The key hash takes 38 bits in
+# older tables and 39 in the game's current ones, which the table itself tells (_hash_bits).
 # --------------------------------------------------------------------------------------
 
 def _entries(table: bytes) -> Tuple[int, int]:
@@ -169,13 +169,27 @@ def _entries(table: bytes) -> Tuple[int, int]:
     return count, 8 + count * 8
 
 
+def _hash_bits(table: bytes) -> int:
+    """How many low bits of an entry are the key's hash: the fewest that leave every offset inside the text block."""
+    count, text_start = _entries(table)
+    if not count:
+        return 38
+    largest = max(struct.unpack_from(f"<{count}Q", table, 8))
+    for bits in (38, 39, 40):
+        if largest >> bits < len(table) - text_start:
+            return bits
+    return 38
+
+
 def _text_of(table: bytes, key_hash: int) -> Optional[str]:
     count, text_start = _entries(table)
+    bits = _hash_bits(table)
+    mask = (1 << bits) - 1
     for i in range(count):
         entry = struct.unpack_from("<Q", table, 8 + i * 8)[0]
-        if entry & RST_MASK != key_hash:
+        if entry & mask != key_hash & mask:
             continue
-        at = text_start + (entry >> 38)
+        at = text_start + (entry >> bits)
         end = table.index(b"\0", at)
         return table[at:end].decode("utf-8", "replace")
     return None
@@ -188,17 +202,19 @@ def _with_text(table: bytes, key_hash: int, text: str) -> bytes:
     every other offset where it was.
     """
     count, text_start = _entries(table)
+    bits = _hash_bits(table)
+    mask = (1 << bits) - 1
     entries = [struct.unpack_from("<Q", table, 8 + i * 8)[0] for i in range(count)]
     added = text.encode("utf-8") + b"\0"
-    entry = key_hash | ((len(table) - text_start) << 38)
+    entry = (key_hash & mask) | ((len(table) - text_start) << bits)
 
     for i, existing in enumerate(entries):
-        if existing & RST_MASK == key_hash:
+        if existing & mask == key_hash & mask:
             entries[i] = entry
             break
     else:
         entries.append(entry)
-        entries.sort(key=lambda e: e & RST_MASK)
+        entries.sort(key=lambda e: e & mask)
 
     out = bytearray(table[:4])
     out += struct.pack("<I", len(entries))
@@ -258,7 +274,8 @@ def _xxh3_64(data: bytes) -> int:
 
 
 def _key_hash(key: str) -> int:
-    return _xxh3_64(key.lower().encode("utf-8")) & RST_MASK
+    """The key's whole xxh3: a table keeps as many of its low bits as it uses (_hash_bits)."""
+    return _xxh3_64(key.lower().encode("utf-8"))
 
 
 # --------------------------------------------------------------------------------------
