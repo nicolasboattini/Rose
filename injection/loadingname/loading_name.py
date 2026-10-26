@@ -21,6 +21,10 @@ those should keep the champion's name. They read the key the champion's own reco
 ("Characters/<Champion>/CharacterRecords/Root", field name), while the loading screen builds its key from the champion's
 internal name. So the mod also carries the champion's record pointing at a key of its own, of the same length, that
 holds the champion's name: RAW/data/characters/<champion>/<champion>.bin.
+
+A skin retargeted onto a skin the player owns (injection.retarget) runs as that skin n instead, and the screen asks for
+"game_character_skin_displayname_<Champion>_<n>": the skin's name is written there, and the champion's own text and
+record are left alone.
 """
 
 import json
@@ -358,10 +362,11 @@ def parse_skin_id(skin_name: str, champion_id: Optional[int] = None) -> int:
     return 0
 
 
-def build(game_dir: Path, mods_dir: Path, mod_folder: Path, skin_id: int) -> Optional[str]:
+def build(game_dir: Path, mods_dir: Path, mod_folder: Path, skin_id: int, slot: int = 0) -> Optional[str]:
     """Writes the mod and returns its folder name, or None when there is nothing to show.
 
-    skin_id is the client's id (champion id * 1000 + skin number); chromas pass their base skin's id.
+    skin_id is the client's id (champion id * 1000 + skin number); chromas pass their base skin's id. slot is the skin
+    number the injected skin runs as: 0, or the owned skin it was retargeted onto.
     """
     try:
         if not skin_id or skin_id % 1000 == 0:
@@ -382,10 +387,14 @@ def build(game_dir: Path, mods_dir: Path, mod_folder: Path, skin_id: int) -> Opt
                 name = _text_of(table, _key_hash(f"game_character_skin_displayname_{alias}_{skin_id % 1000}"))
                 if not name:
                     continue
-                champion_key = _key_hash(f"{RECORD_KEY}{alias}")
-                champion_name = _text_of(table, champion_key)
-                if champion_name is None:
-                    continue
+                if slot:
+                    # the screen reads the owned skin's own key: nothing of the champion's changes
+                    champion_key, champion_name = _key_hash(f"game_character_skin_displayname_{alias}_{slot}"), None
+                else:
+                    champion_key = _key_hash(f"{RECORD_KEY}{alias}")
+                    champion_name = _text_of(table, champion_key)
+                    if champion_name is None:
+                        continue
                 target = Path(mods_dir) / MOD_FOLDER
                 (target / TABLE_PATH.parent).mkdir(parents=True, exist_ok=True)
                 (target / "META").mkdir(parents=True, exist_ok=True)
@@ -398,15 +407,16 @@ def build(game_dir: Path, mods_dir: Path, mod_folder: Path, skin_id: int) -> Opt
                 table = _with_text(table, champion_key, name)
 
                 # the chat and the name over the head keep the champion's name (see the module's note)
-                record = _champion_record(game_dir, mod_folder, alias)
-                own_record = _with_own_record_key(record, alias) if record else None
-                if own_record:
-                    table = _with_text(table, _key_hash(f"{RECORD_KEY_OWN}{alias}"), champion_name)
-                    record_file = target / "RAW" / _record_path(alias)
-                    record_file.parent.mkdir(parents=True, exist_ok=True)
-                    record_file.write_bytes(own_record)
-                else:
-                    log.debug(f"[LOADNAME] {alias}'s record not found, the chat shows the skin's name too")
+                if champion_name is not None:
+                    record = _champion_record(game_dir, mod_folder, alias)
+                    own_record = _with_own_record_key(record, alias) if record else None
+                    if own_record:
+                        table = _with_text(table, _key_hash(f"{RECORD_KEY_OWN}{alias}"), champion_name)
+                        record_file = target / "RAW" / _record_path(alias)
+                        record_file.parent.mkdir(parents=True, exist_ok=True)
+                        record_file.write_bytes(own_record)
+                    else:
+                        log.debug(f"[LOADNAME] {alias}'s record not found, the chat shows the skin's name too")
 
                 (target / TABLE_PATH).write_bytes(table)
                 log.info(f"[LOADNAME] the loading screen will show '{name}'")

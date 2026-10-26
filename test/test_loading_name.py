@@ -202,6 +202,31 @@ class LoadingNameTests(unittest.TestCase):
         written = (mods / name / 'RAW' / 'data' / 'characters' / 'zed' / 'zed.bin').read_bytes()
         self.assertEqual(written, struct.pack('<H', len(key)) + b'rose_character_displayname_Zed')
 
+    def test_a_skin_running_as_an_owned_skin_takes_that_skins_name(self):
+        game = self.root / 'game'
+        (game / 'DATA' / 'FINAL' / 'Localized').mkdir(parents=True)
+        (game / 'DATA' / 'FINAL' / 'Localized' / 'Global.en_US.wad.client').write_bytes(make_wad(make_table({
+            'game_character_displayname_Zed': 'Zed',
+            'game_character_skin_displayname_Zed_1': 'Shockblade Zed',
+            'game_character_skin_displayname_Zed_2': 'SKT T1 Zed',
+        })))
+        mod = self.root / 'mod'
+        (mod / 'WAD').mkdir(parents=True)
+        (mod / 'WAD' / 'Zed.wad.client').touch()
+        mods = self.root / 'mods'
+        mods.mkdir()
+
+        name = loading_name.build(game, mods, mod, 238001, slot=2)
+        table = (mods / name / loading_name.TABLE_PATH).read_bytes()
+
+        def text(key):
+            return loading_name._text_of(table, loading_name._key_hash(key))
+
+        self.assertEqual(text('game_character_skin_displayname_Zed_2'), 'Shockblade Zed')
+        # the champion's own name and record are untouched: the chat and the name over the head need nothing
+        self.assertEqual(text('game_character_displayname_Zed'), 'Zed')
+        self.assertFalse((mods / name / 'RAW' / 'data' / 'characters').exists())
+
 
 def make_wad(data, path_hash=loading_name.TABLE_HASH):
     """A wad v3 holding one uncompressed entry."""
